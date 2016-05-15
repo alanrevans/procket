@@ -60,7 +60,7 @@
         ntohl/1,
         ntohs/1
     ]).
--export([make_args/2,progname/0]).
+-export([on_load/0, make_args/2,progname/0]).
 
 -on_load(on_load/0).
 
@@ -206,7 +206,7 @@ fdget(Socket) ->
 
 make_args(Port, Options) ->
     Args = reorder_args(Port, Options),
-    proplists:get_value(progname, Options, "sudo " ++ progname()) ++ " " ++
+    proplists:get_value(progname, Options, progname()) ++ " -v " ++
     string:join([ get_switch(Arg) || Arg <- Args ], " ") ++
     " > /dev/null 2>&1; printf $?".
 
@@ -305,6 +305,7 @@ family(inet6) ->
         {unix, freebsd} -> 28
     end;
 family(packet) -> 17;
+family(pf_key) -> ?PF_KEY;
 family(Proto) when Proto == local; Proto == unix; Proto == file -> 1;
 
 family(0) -> unspec;
@@ -331,8 +332,9 @@ family(30) ->
         {unix, linux} -> tipc;
         {unix, freebsd} -> atm;
         {unix, darwin} -> inet6
-    end.
-
+    end;
+family(?PF_KEY) ->
+    pf_key.
 
 %% Socket type
 type(stream) -> 1;
@@ -351,11 +353,13 @@ protocol(icmp) -> 1;
 protocol(tcp) -> 6;
 protocol(udp) -> 17;
 protocol(raw) -> 255;
+protocol(pf_key_v2) -> ?PF_KEY_V2;
 
 protocol(0) -> ip;
 protocol(1) -> icmp;
 protocol(6) -> tcp;
-protocol(255) -> raw.
+protocol(255) -> raw;
+protocol(?PF_KEY_V2) -> pf_key_v2.
 
 maybe_atom(_Type, Value) when is_integer(Value) -> Value;
 maybe_atom(family, Value) -> family(Value);

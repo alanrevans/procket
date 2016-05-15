@@ -133,6 +133,7 @@ nif_socket(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     int flags = 0;
 
 
+
     if (!enif_get_int(env, argv[0], &family))
         return enif_make_badarg(env);
 
@@ -143,20 +144,20 @@ nif_socket(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
 
     s = socket(family, type, protocol);
-    if (s < 0)
+    if (s < 0) {
         return error_tuple(env, errno);
-
+    }
     flags = fcntl(s, F_GETFL, 0);
 
-    if (flags < 0)
+    if (flags < 0) {
         return error_tuple(env, errno);
 
-    if (fcntl(s, F_SETFL, flags|O_NONBLOCK) < 0)
+    }
+    if (fcntl(s, F_SETFL, flags|O_NONBLOCK) < 0) 
         return error_tuple(env, errno);
-
-    return enif_make_tuple2(env,
-           atom_ok,
-           enif_make_int(env, s));
+    
+    return enif_make_tuple2(env, atom_ok,
+           		    enif_make_int(env, s));
 }
 
 
@@ -313,9 +314,8 @@ nif_sendto(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!enif_inspect_binary(env, argv[3], &sa))
         return enif_make_badarg(env);
 
-    if (sendto(sockfd, buf.data, buf.size, flags,
-        (sa.size == 0 ? NULL : (struct sockaddr *)sa.data),
-        sa.size) == -1)
+
+    if (sendto(sockfd, buf.data, buf.size, 0, NULL, 0) == -1)
         return error_tuple(env, errno);
 
     return atom_ok;

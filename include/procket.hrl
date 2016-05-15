@@ -62,6 +62,13 @@
 -ifndef(PF_PACKET).
 -define(PF_PACKET, 17).                     % Packet family.
 -endif.
+-ifndef(PF_KEY).
+-define(PF_KEY, 15).                     % PF_KEY Family RFC2367
+-endif.
+
+-ifndef(PF_KEY_V2).
+-define(PF_KEY_V2, 2).                     % PF_KEY protocol
+-endif.
 
 
 -define(SOL_SOCKET, 1).
