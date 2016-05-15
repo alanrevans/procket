@@ -1,21 +1,21 @@
-/* Copyright (c) 2010-2011, Michael Santos <michael.santos@gmail.com>
+/* Copyright (c) 2010-2015, Michael Santos <michael.santos@gmail.com>
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
- * 
+ *
  * Redistributions of source code must retain the above copyright
  * notice, this list of conditions and the following disclaimer.
- * 
+ *
  * Redistributions in binary form must reproduce the above copyright
  * notice, this list of conditions and the following disclaimer in the
  * documentation and/or other materials provided with the distribution.
- * 
+ *
  * Neither the name of the author nor the names of its contributors
  * may be used to endorse or promote products derived from this software
  * without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
@@ -33,8 +33,7 @@
 #include "erl_driver.h"
 #include "ancillary.h"
 #include "procket.h"
-
-#define BACKLOG     5
+#include "procket_constants.h"
 
 static ERL_NIF_TERM error_tuple(ErlNifEnv *env, int errnum);
 void alloc_free(ErlNifEnv *env, void *obj);
@@ -42,6 +41,7 @@ void alloc_free(ErlNifEnv *env, void *obj);
 static ERL_NIF_TERM atom_ok;
 static ERL_NIF_TERM atom_error;
 static ERL_NIF_TERM atom_eagain;
+static ERL_NIF_TERM atom_undefined;
 
 static ErlNifResourceType *PROCKET_ALLOC_RESOURCE;
 
@@ -85,6 +85,7 @@ load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info)
     atom_ok = enif_make_atom(env, "ok");
     atom_error = enif_make_atom(env, "error");
     atom_eagain = enif_make_atom(env, "eagain");
+    atom_undefined = enif_make_atom(env, "undefined");
 
     if ( (PROCKET_ALLOC_RESOURCE = enif_open_resource_type(env, NULL,
         "procket_alloc_resource", alloc_free,
@@ -94,6 +95,18 @@ load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info)
     return (0);
 }
 
+/* Stubs for reload and upgrade */
+    static int
+reload(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM info)
+{
+    return 0;
+}
+
+    static int
+upgrade(ErlNifEnv* env, void** priv_data, void** old_priv_data, ERL_NIF_TERM info)
+{
+  return 0;
+}
 
 /* Retrieve the file descriptor from the forked privileged process */
 /* 0: connected Unix socket */
@@ -188,7 +201,7 @@ nif_accept(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     int l = -1;
     int s = -1;
-    int salen = 0;
+    unsigned long salen = 0;
     ErlNifBinary sa = {0};
     int flags = 0;
 
@@ -196,7 +209,7 @@ nif_accept(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!enif_get_int(env, argv[0], &l))
         return enif_make_badarg(env);
 
-    if (!enif_get_int(env, argv[1], &salen))
+    if (!enif_get_ulong(env, argv[1], &salen))
         return enif_make_badarg(env);
 
     if (!enif_alloc_binary(salen, &sa))
@@ -247,7 +260,7 @@ nif_recvfrom(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     int sockfd = -1;
     unsigned long len = 0;
-    int salen = 0;
+    unsigned long salen = 0;
     int flags = 0;
 
     ErlNifBinary buf = {0};
@@ -261,7 +274,7 @@ nif_recvfrom(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     if (!enif_get_int(env, argv[2], &flags))
         return enif_make_badarg(env);
-    if (!enif_get_int(env, argv[3], &salen))
+    if (!enif_get_ulong(env, argv[3], &salen))
         return enif_make_badarg(env);
 
     if (!enif_alloc_binary(len, &buf))
@@ -273,15 +286,10 @@ nif_recvfrom(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if ( (bufsz = recvfrom(sockfd, buf.data, buf.size, flags,
         (sa.size == 0 ? NULL : (struct sockaddr *)sa.data),
         (socklen_t *)&salen)) == -1) {
+        int err = errno;
         enif_release_binary(&buf);
         enif_release_binary(&sa);
-        switch (errno) {
-            case EAGAIN:
-            case EINTR:
-                return enif_make_tuple2(env, atom_error, atom_eagain);
-            default:
-                return error_tuple(env, errno);
-        }
+        return error_tuple(env, err);
     }
 
     PROCKET_REALLOC(buf, bufsz);
@@ -298,6 +306,7 @@ nif_sendto(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     int sockfd = -1;
     int flags = 0;
+    ssize_t n = 0;
 
     ErlNifBinary buf = {0};
     ErlNifBinary sa = {0};
@@ -307,18 +316,21 @@ nif_sendto(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     if (!enif_inspect_binary(env, argv[1], &buf))
         return enif_make_badarg(env);
-    
+
     if (!enif_get_int(env, argv[2], &flags))
         return enif_make_badarg(env);
 
     if (!enif_inspect_binary(env, argv[3], &sa))
         return enif_make_badarg(env);
 
+    n = sendto(sockfd, buf.data, buf.size, flags,
+            (sa.size == 0 ? NULL : (struct sockaddr *)sa.data),
+            sa.size);
 
-    if (sendto(sockfd, buf.data, buf.size, 0, NULL, 0) == -1)
+    if (n < 0)
         return error_tuple(env, errno);
 
-    return atom_ok;
+    return enif_make_tuple2(env, atom_ok, enif_make_int64(env, n));
 }
 
 
@@ -344,13 +356,7 @@ nif_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if ( (bufsz = read(fd, buf.data, buf.size)) == -1) {
         int err = errno;
         enif_release_binary(&buf);
-        switch (err) {
-            case EAGAIN:
-            case EINTR:
-                return enif_make_tuple2(env, atom_error, atom_eagain);
-            default:
-                return error_tuple(env, err);
-        }
+        return error_tuple(env, err);
     }
 
     PROCKET_REALLOC(buf, bufsz);
@@ -364,6 +370,7 @@ nif_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 nif_write(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     int fd = -1;
+    ssize_t n = 0;
 
     ErlNifBinary buf = {0};
 
@@ -373,10 +380,12 @@ nif_write(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!enif_inspect_binary(env, argv[1], &buf))
         return enif_make_badarg(env);
 
-    if (write(fd, buf.data, buf.size) == -1)
+    n = write(fd, buf.data, buf.size);
+
+    if (n < 0)
         return error_tuple(env, errno);
 
-    return atom_ok;
+    return enif_make_tuple2(env, atom_ok, enif_make_int64(env, n));
 }
 
 #define IOVMAX 256
@@ -390,7 +399,8 @@ nif_writev(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     struct iovec iovs[IOVMAX];
     int fd = -1;
     unsigned iovcnt;
-    
+    ssize_t n = 0;
+
     if (!enif_get_int(env, argv[0], &fd))
         return enif_make_badarg(env);
 
@@ -415,10 +425,12 @@ nif_writev(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         iov->iov_len = buf.size;
     }
 
-    if (writev(fd, iovs, iovcnt) == -1)
+    n = writev(fd, iovs, iovcnt);
+
+    if (n < 0)
         return error_tuple(env, errno);
 
-    return atom_ok;
+    return enif_make_tuple2(env, atom_ok, enif_make_int64(env, n));
 }
 
 /* 0: socket descriptor, 1: struct sockaddr */
@@ -535,6 +547,310 @@ nif_setsockopt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return error_tuple(env, errno);
 
     return atom_ok;
+}
+
+/* 0: int socket descriptor, 1: int level,
+ * 2: int optname, 3: void *optval
+ */
+    static ERL_NIF_TERM
+nif_getsockopt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    int s = -1;
+    int level = 0;
+    int optname = 0;
+    ErlNifBinary optval = {0};
+    socklen_t optlen = 0;
+
+    if (!enif_get_int(env, argv[0], &s))
+        return enif_make_badarg(env);
+
+    if (!enif_get_int(env, argv[1], &level))
+        return enif_make_badarg(env);
+
+    if (!enif_get_int(env, argv[2], &optname))
+        return enif_make_badarg(env);
+
+    if (!enif_inspect_binary(env, argv[3], &optval))
+        return enif_make_badarg(env);
+
+    /* Make the binary mutable */
+    if (!enif_realloc_binary(&optval, optval.size))
+        return error_tuple(env, ENOMEM);
+
+    optlen = optval.size;
+
+    if (getsockopt(s, level, optname,
+                (optval.size == 0 ? NULL : optval.data), &optlen) < 0)
+        return error_tuple(env, errno);
+
+    PROCKET_REALLOC(optval, optlen);
+
+    return enif_make_tuple2(env,
+            atom_ok,
+            enif_make_binary(env, &optval));
+}
+
+
+// int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+    static ERL_NIF_TERM
+nif_getsockname(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    int s = -1;
+    ErlNifBinary addr = {0};
+    socklen_t addrlen = 0;
+
+
+    if (!enif_get_int(env, argv[0], &s))
+        return enif_make_badarg(env);
+
+    if (!enif_inspect_binary(env, argv[1], &addr))
+        return enif_make_badarg(env);
+
+    /* Make the binary mutable */
+    if (!enif_realloc_binary(&addr, addr.size))
+        return error_tuple(env, ENOMEM);
+
+    addrlen = addr.size;
+
+    if (getsockname(s, (struct sockaddr *)addr.data, (socklen_t *)&addrlen) < 0)
+        return error_tuple(env, errno);
+
+    PROCKET_REALLOC(addr, addrlen);
+
+    return enif_make_tuple2(env,
+            atom_ok,
+            enif_make_binary(env, &addr));
+}
+
+    static ERL_NIF_TERM
+nif_recvmsg(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    int s = -1;
+    ErlNifBinary buf = {0};
+    ErlNifBinary src_addr = {0};
+    char *ctrldata = NULL;
+    ERL_NIF_TERM ctrldatalist;
+    int flags = 0;
+    unsigned long bufsize = 0;
+    unsigned long ctrlsize = 0;
+    unsigned long sasize = 0;
+
+    struct iovec iov[1];
+    struct msghdr message;
+    struct cmsghdr *cmsg;
+
+    ssize_t n = 0;
+
+    if (!enif_get_int(env, argv[0], &s))
+        return enif_make_badarg(env);
+
+    if (!enif_get_ulong(env, argv[1], &bufsize))
+        return enif_make_badarg(env);
+
+    if (!enif_get_int(env, argv[2], &flags))
+        return enif_make_badarg(env);
+
+    if (!enif_get_ulong(env, argv[3], &ctrlsize))
+        return enif_make_badarg(env);
+
+    if (!enif_get_ulong(env, argv[4], &sasize))
+        return enif_make_badarg(env);
+
+    if (!enif_alloc_binary(bufsize, &buf))
+        return error_tuple(env, ENOMEM);
+
+    if (ctrlsize > 0 && !(ctrldata = malloc(ctrlsize))) {
+        enif_release_binary(&buf);
+        return error_tuple(env, ENOMEM);
+    }
+
+    if (!enif_alloc_binary(sasize, &src_addr)) {
+        enif_release_binary(&buf);
+        free(ctrldata);
+        return error_tuple(env, ENOMEM);
+    }
+
+    iov[0].iov_base = (buf.size == 0 ? NULL : buf.data);
+    iov[0].iov_len=buf.size;
+
+    message.msg_name = (src_addr.size == 0 ? NULL : src_addr.data);
+    message.msg_namelen=src_addr.size;
+    message.msg_iov=iov;
+    message.msg_iovlen=1;
+    message.msg_control=ctrldata;
+    message.msg_controllen=ctrlsize;
+
+    n = recvmsg(s, &message, flags);
+
+    if (n < 0) {
+        int err = errno;
+        enif_release_binary(&buf);
+        enif_release_binary(&src_addr);
+        free(ctrldata);
+        return error_tuple(env, err);
+    }
+
+    /* resize the binary to the actual size of the received packet
+     *
+     * XXX On error, the macro will return ENOMEM here, leaking buf,
+     * XXX src_addr and ctrldata. Since the VM has OOM'ed, it will probably
+     * XXX crash anyway.
+     */
+    PROCKET_REALLOC(buf, n);
+    PROCKET_REALLOC(src_addr, message.msg_namelen);
+
+    ctrldatalist = enif_make_list(env, 0);
+
+    for (cmsg = CMSG_FIRSTHDR(&message); cmsg != NULL;
+            cmsg = CMSG_NXTHDR(&message, cmsg)) {
+        size_t len = cmsg->cmsg_len - CMSG_LEN(0);
+        ErlNifBinary cdata = {0};
+
+        if (!enif_alloc_binary(len, &cdata)) {
+            enif_release_binary(&buf);
+            enif_release_binary(&src_addr);
+            free(ctrldata);
+            return error_tuple(env, ENOMEM);
+        }
+
+        memcpy(cdata.data, CMSG_DATA(cmsg), len);
+
+        ctrldatalist = enif_make_list_cell(env,
+                enif_make_tuple3(env,
+                    enif_make_int(env, cmsg->cmsg_level),
+                    enif_make_int(env, cmsg->cmsg_type),
+                    enif_make_binary(env, &cdata)), ctrldatalist);
+    }
+
+    free(ctrldata);
+
+    return enif_make_tuple5(env,
+            atom_ok,
+            enif_make_binary(env, &buf), /* Data packet */
+            enif_make_int(env, message.msg_flags), /* the message flags, eg. MSG_EOR, MSG_OOB, etc. */
+            ctrldatalist, /* array of 3-tuples of {cmsg->cmsg_level, cmsg->cmsg_type, cmsg->cmsg_data} */
+            enif_make_binary(env, &src_addr) /* source address, as a sockaddr_storage */
+            );
+}
+
+    static ERL_NIF_TERM
+nif_sendmsg(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    int sockfd = -1;
+    int flags = 0;
+
+    ssize_t n = 0;
+
+    ErlNifBinary buf = {0};
+    ErlNifBinary sa = {0};
+
+    ERL_NIF_TERM cdata_list, head, tail;
+
+    char *cdata = NULL;
+    struct iovec iov[1];
+    struct msghdr message;
+    struct cmsghdr *cmsg;
+    size_t cdata_size = 0;
+
+    if (!enif_get_int(env, argv[0], &sockfd))
+        return enif_make_badarg(env);
+
+    if (!enif_inspect_binary(env, argv[1], &buf))
+        return enif_make_badarg(env);
+
+    if (!enif_get_int(env, argv[2], &flags))
+        return enif_make_badarg(env);
+
+    if (!enif_is_list(env, argv[3]))
+        return enif_make_badarg(env);
+
+    if (!enif_inspect_binary(env, argv[4], &sa))
+        return enif_make_badarg(env);
+
+    cdata_list = argv[3];
+
+    // figure out how much control data we'll need to send
+    while(enif_get_list_cell(env, cdata_list, &head, &tail)) {
+        const ERL_NIF_TERM* fields;
+        int arity;
+        int level, type;
+        ErlNifBinary cdata_field = {0};
+        if (!enif_get_tuple(env, head, &arity, &fields) || arity != 3) {
+            return enif_make_badarg(env);
+        }
+
+        if (!enif_get_int(env, fields[0], &level)) {
+            return enif_make_badarg(env);
+        }
+
+        if (!enif_get_int(env, fields[1], &type)) {
+            return enif_make_badarg(env);
+        }
+
+        if (!enif_inspect_binary(env, fields[2], &cdata_field)) {
+            return enif_make_badarg(env);
+        }
+
+        cdata_size += CMSG_SPACE(cdata_field.size);
+
+        cdata_list = tail;
+    }
+
+    if (cdata_size > 0) {
+        // allocate enough control data space, if any
+        // freebsd throws einval if the cdata length is 0
+        // but the pointer isn't NULL
+        if (!(cdata = malloc(cdata_size))) {
+            return error_tuple(env, ENOMEM);
+        }
+    }
+
+    // set up the iov and msghdr stuff
+    iov[0].iov_base=(buf.size == 0 ? NULL : buf.data);
+    iov[0].iov_len=buf.size;
+
+    message.msg_name=(sa.size == 0 ? NULL : sa.data);
+    message.msg_namelen=sa.size;
+    message.msg_iov=iov;
+    message.msg_iovlen=1;
+    message.msg_control=cdata;
+    message.msg_controllen=cdata_size;
+
+
+    // loop over the control data again, this time filling in the data in the
+    // msghdr
+    cdata_list = argv[3];
+
+    cmsg = CMSG_FIRSTHDR(&message);
+
+    while(cmsg && enif_get_list_cell(env, cdata_list, &head, &tail)) {
+        const ERL_NIF_TERM* fields;
+        int arity;
+        unsigned char *cmsg_data;
+        ErlNifBinary cdata_field = {0};
+        // don't need to check here, we'd have crashed in the last loop if
+        // things were wrong
+        enif_get_tuple(env, head, &arity, &fields);
+        enif_get_int(env, fields[0], &cmsg->cmsg_level);
+        enif_get_int(env, fields[1], &cmsg->cmsg_type);
+        enif_inspect_binary(env, fields[2], &cdata_field);
+        cmsg_data = CMSG_DATA(cmsg);
+        // copy the control data into the cdata struct
+        memcpy(cmsg_data, cdata_field.data, cdata_field.size);
+
+        // set the length
+        cmsg->cmsg_len=CMSG_LEN(cdata_field.size);
+
+        cdata_list = tail;
+        cmsg = CMSG_NXTHDR(&message,cmsg);
+    }
+
+    n = sendmsg(sockfd, &message, flags);
+
+    if (n < 0)
+        return error_tuple(env, errno);
+
+    return enif_make_tuple2(env, atom_ok, enif_make_int64(env, n));
 }
 
 
@@ -669,6 +985,122 @@ nif_memcpy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return atom_ok;
 }
 
+    static ERL_NIF_TERM
+nif_socket_levels(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    const struct procket_define *p = NULL;
+    ERL_NIF_TERM list = {0};
+
+    list = enif_make_list(env, 0);
+
+    for (p = procket_socket_level; p->key != NULL; p++) {
+        list = enif_make_list_cell(
+                env,
+                enif_make_tuple2(
+                    env,
+                    enif_make_atom(env, p->key),
+                    enif_make_uint(env, p->val)
+                    ),
+                list);
+    }
+
+    return list;
+}
+
+    static ERL_NIF_TERM
+nif_socket_level(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    char buf[256] = {0};
+    const struct procket_define *p = NULL;
+
+    if (!enif_get_atom(env, argv[0], buf, sizeof(buf), ERL_NIF_LATIN1))
+        return enif_make_badarg(env);
+
+    for (p = procket_socket_level; p->key != NULL; p++) {
+        if (!strcmp(buf, p->key))
+            return enif_make_int(env, p->val);
+    }
+
+    return atom_undefined;
+}
+
+    static ERL_NIF_TERM
+nif_socket_optnames(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    const struct procket_define *p = NULL;
+    ERL_NIF_TERM list = {0};
+
+    list = enif_make_list(env, 0);
+
+    for (p = procket_socket_optname; p->key != NULL; p++) {
+        list = enif_make_list_cell(
+                env,
+                enif_make_tuple2(
+                    env,
+                    enif_make_atom(env, p->key),
+                    enif_make_uint(env, p->val)
+                    ),
+                list);
+    }
+
+    return list;
+}
+
+    static ERL_NIF_TERM
+nif_socket_optname(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    char buf[256] = {0};
+    const struct procket_define *p = NULL;
+
+    if (!enif_get_atom(env, argv[0], buf, sizeof(buf), ERL_NIF_LATIN1))
+        return enif_make_badarg(env);
+
+    for (p = procket_socket_optname; p->key != NULL; p++) {
+        if (!strcmp(buf, p->key))
+            return enif_make_int(env, p->val);
+    }
+
+    return atom_undefined;
+}
+
+    static ERL_NIF_TERM
+nif_socket_protocols(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    const struct procket_define *p = NULL;
+    ERL_NIF_TERM list = {0};
+
+    list = enif_make_list(env, 0);
+
+    for (p = procket_socket_protocol; p->key != NULL; p++) {
+        list = enif_make_list_cell(
+                env,
+                enif_make_tuple2(
+                    env,
+                    enif_make_atom(env, p->key),
+                    enif_make_uint(env, p->val)
+                    ),
+                list);
+    }
+
+    return list;
+}
+
+    static ERL_NIF_TERM
+nif_socket_protocol(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    char buf[256] = {0};
+    const struct procket_define *p = NULL;
+
+    if (!enif_get_atom(env, argv[0], buf, sizeof(buf), ERL_NIF_LATIN1))
+        return enif_make_badarg(env);
+
+    for (p = procket_socket_protocol; p->key != NULL; p++) {
+        if (!strcmp(buf, p->key))
+            return enif_make_int(env, p->val);
+    }
+
+    return atom_undefined;
+}
 
 /* 0: errno */
     static ERL_NIF_TERM
@@ -710,25 +1142,38 @@ static ErlNifFunc nif_funcs[] = {
     {"fdrecv", 1, nif_fdrecv},
 
     {"close", 1, nif_close},
+
     {"accept", 2, nif_accept},
     {"bind", 2, nif_bind},
     {"connect", 2, nif_connect},
+    {"getsockname", 2, nif_getsockname},
+    {"getsockopt_nif", 4, nif_getsockopt},
     {"listen", 2, nif_listen},
+    {"read", 2, nif_read},
+    {"write_nif", 2, nif_write},
+    {"writev_nif", 2, nif_writev},
+
     {"ioctl", 3, nif_ioctl},
     {"socket_nif", 3, nif_socket},
+    {"recvmsg_nif", 5, nif_recvmsg},
+    {"sendmsg_nif", 5, nif_sendmsg},
+
     {"recvfrom", 4, nif_recvfrom},
-    {"sendto", 4, nif_sendto},
-    {"setsockopt", 4, nif_setsockopt},
+    {"sendto_nif", 4, nif_sendto},
+    {"setsockopt_nif", 4, nif_setsockopt},
 
-    {"read", 2, nif_read},
-    {"write", 2, nif_write},
-    {"writev", 2, nif_writev},
-
-    {"alloc", 1, nif_alloc},
-    {"memcpy", 2, nif_memcpy},
+    {"alloc_nif", 1, nif_alloc},
     {"buf", 1, nif_buf},
+    {"memcpy", 2, nif_memcpy},
+
+    {"socket_level", 0, nif_socket_levels},
+    {"socket_optname", 0, nif_socket_optnames},
+    {"socket_protocol", 0, nif_socket_protocols},
+    {"socket_level", 1, nif_socket_level},
+    {"socket_optname", 1, nif_socket_optname},
+    {"socket_protocol", 1, nif_socket_protocol},
 
     {"errno_id", 1, nif_errno_id}
 };
 
-ERL_NIF_INIT(procket, nif_funcs, load, NULL, NULL, NULL)
+ERL_NIF_INIT(procket, nif_funcs, load, reload, upgrade, NULL)

@@ -1,21 +1,21 @@
-%% Copyright (c) 2010-2011, Michael Santos <michael.santos@gmail.com>
+%% Copyright (c) 2010-2015, Michael Santos <michael.santos@gmail.com>
 %% All rights reserved.
-%% 
+%%
 %% Redistribution and use in source and binary forms, with or without
 %% modification, are permitted provided that the following conditions
 %% are met:
-%% 
+%%
 %% Redistributions of source code must retain the above copyright
 %% notice, this list of conditions and the following disclaimer.
-%% 
+%%
 %% Redistributions in binary form must reproduce the above copyright
 %% notice, this list of conditions and the following disclaimer in the
 %% documentation and/or other materials provided with the distribution.
-%% 
+%%
 %% Neither the name of the author nor the names of its contributors
 %% may be used to endorse or promote products derived from this software
 %% without specific prior written permission.
-%% 
+%%
 %% THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
 %% "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
 %% LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
@@ -30,9 +30,9 @@
 %% POSSIBILITY OF SUCH DAMAGE.
 -module(procket).
 -include("procket.hrl").
+-include_lib("kernel/include/file.hrl").
 
 -export([
-        init/0,
         open/1,open/2,
         dev/1,
         socket/3,
@@ -41,16 +41,28 @@
         accept/1,accept/2,
         close/1,
         recv/2,recvfrom/2,recvfrom/4,
-        sendto/2, sendto/3,sendto/4,
-        read/2, write/2, writev/2,
+        sendto/2, sendto/3, sendto/4,
+        read/2,
+        write/2, writev/2,
         bind/2,
         ioctl/3,
         setsockopt/4,
+        getsockopt/4,
+        getsockname/2,
+
+        recvmsg/4, recvmsg/5,
+        sendmsg/4, sendmsg/5,
+
+        family/1,
 
         alloc/1,
         buf/1,
         memcpy/2,
         wordalign/1, wordalign/2,
+
+        socket_level/0, socket_level/1,
+        socket_optname/0, socket_optname/1,
+        socket_protocol/0, socket_protocol/1,
 
         errno_id/1
     ]).
@@ -62,22 +74,26 @@
     ]).
 -export([on_load/0, make_args/2,progname/0]).
 
+% for debugging
+-export([
+    getopts/1,
+    progname/0
+    ]).
+
 -on_load(on_load/0).
-
-
-init() ->
-    on_load().
 
 on_load() ->
     erlang:load_nif(progname(), []).
 
 
-
+%%--------------------------------------------------------------------
+%%% NIF Stubs
+%%--------------------------------------------------------------------
 close(_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 
 fdrecv(_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 
 accept(Socket) ->
     case accept(Socket, 0) of
@@ -85,125 +101,287 @@ accept(Socket) ->
         Error -> Error
     end.
 accept(_,_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 
 bind(_,_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 
 connect(_,_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 
 listen(Socket) when is_integer(Socket) ->
     listen(Socket, ?BACKLOG).
 listen(_,_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 
 recv(Socket,Size) ->
     recvfrom(Socket,Size).
 recvfrom(Socket,Size) ->
     case recvfrom(Socket, Size, 0, 0) of
-        {ok, Buf, <<>>} -> {ok, Buf}; 
+        {ok, Buf, <<>>} -> {ok, Buf};
         Error -> Error
     end.
 recvfrom(_,_,_,_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 
 read(_,_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 
 socket(Family, Type, Protocol) ->
     socket_nif(maybe_atom(family, Family),
         maybe_atom(type, Type),
         maybe_atom(protocol, Protocol)).
 socket_nif(_,_,_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 
 ioctl(_,_,_) ->
-    erlang:error(not_implemented).
-alloc(_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 buf(_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 memcpy(_,_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
+
+alloc(Struct) ->
+    case alloc_nif(Struct) of
+        {ok, Bin, Res} ->
+            {ok, Bin, lists:reverse(Res)};
+        N ->
+            N
+    end.
+alloc_nif(_) ->
+    erlang:nif_error(not_implemented).
 
 sendto(Socket, Buf) ->
     sendto(Socket, Buf, 0, <<>>).
 sendto(Socket, Buf, Flags) ->
     sendto(Socket, Buf, Flags, <<>>).
-sendto(_,_,_,_) ->
-    erlang:error(not_implemented).
+sendto(Socket, Buf, Flags, Sockaddr) ->
+    Size = byte_size(Buf),
+    case sendto_nif(Socket, Buf, Flags, Sockaddr) of
+        {ok, Size} ->
+            ok;
+        Reply ->
+            Reply
+    end.
 
-write(_,_) ->
-    erlang:error(not_implemented).
-writev(_,_) ->
-    erlang:error(not_implemented).
+sendto_nif(_,_,_,_) ->
+    erlang:nif_error(not_implemented).
 
-setsockopt(_,_,_,_) ->
-    erlang:error(not_implemented).
+write(FD, Buf) when is_binary(Buf) ->
+    Size = byte_size(Buf),
+    case write_nif(FD, Buf) of
+        {ok, Size} ->
+            ok;
+        Reply ->
+            Reply
+    end;
+write(FD, Buf) when is_list(Buf) ->
+    writev(FD, Buf).
+
+write_nif(_,_) ->
+    erlang:nif_error(not_implemented).
+
+writev(FD, Buf) ->
+    Size = iolist_size(Buf),
+    case writev_nif(FD, Buf) of
+        {ok, Size} ->
+            ok;
+        Reply ->
+            Reply
+    end.
+
+writev_nif(_,_) ->
+    erlang:nif_error(not_implemented).
+
+recvmsg(Socket,Size,Flags,CtrlDataSize) ->
+    case recvmsg(Socket,Size,Flags,CtrlDataSize,0) of
+        {ok, Buf, Flags, CtrlData, <<>>} ->
+            {ok, Buf, Flags, CtrlData};
+        {error,_} = Error ->
+            Error
+    end.
+recvmsg(Socket,Size,Flags,CtrlDataSize,SockaddrSize) ->
+    case recvmsg_nif(Socket,Size,Flags,CtrlDataSize,SockaddrSize) of
+        {ok, Buf, Flags, CtrlData, Sockaddr} ->
+            {ok, Buf, Flags, lists:reverse(CtrlData), Sockaddr};
+        N ->
+            N
+    end.
+recvmsg_nif(_,_,_,_,_) ->
+    erlang:nif_error(not_implemented).
+
+sendmsg(Socket,Buf,Flags,CtrlData) ->
+    sendmsg(Socket,Buf,Flags,CtrlData,<<>>).
+sendmsg(Socket,Buf,Flags,CtrlData,Sockaddr) ->
+    Size = byte_size(Buf),
+    case sendmsg_nif(Socket,Buf,Flags,CtrlData,Sockaddr) of
+        {ok, Size} ->
+            ok;
+        Reply ->
+            Reply
+    end.
+
+sendmsg_nif(_,_,_,_,_) ->
+    erlang:nif_error(not_implemented).
+
+setsockopt(Socket,Level,Optname,Optval) when is_atom(Level) ->
+    case socket_constant_foreach(Level,
+            [fun socket_level/1, fun socket_protocol/1]) of
+        undefined ->
+            {error,unsupported};
+        N ->
+            setsockopt(Socket, N, Optname, Optval)
+    end;
+setsockopt(Socket,Level,Optname,Optval) when is_atom(Optname) ->
+    case socket_optname(Optname) of
+        undefined ->
+            {error,unsupported};
+        N ->
+            setsockopt(Socket, Level, N, Optval)
+    end;
+setsockopt(Socket,Level,Optname,Optval) ->
+    setsockopt_nif(Socket, Level, Optname, Optval).
+
+getsockopt(Socket,Level,Optname,Optval) when is_atom(Level) ->
+    case socket_constant_foreach(Level,
+            [fun socket_level/1, fun socket_protocol/1]) of
+        undefined ->
+            {error,unsupported};
+        N ->
+            getsockopt(Socket, N, Optname, Optval)
+    end;
+getsockopt(Socket,Level,Optname,Optval) when is_atom(Optname) ->
+    case socket_optname(Optname) of
+        undefined ->
+            {error,unsupported};
+        N ->
+            getsockopt(Socket, Level, N, Optval)
+    end;
+getsockopt(Socket,Level,Optname,Optval) ->
+    getsockopt_nif(Socket, Level, Optname, Optval).
+
+setsockopt_nif(_,_,_,_) ->
+    erlang:nif_error(not_implemented).
+getsockopt_nif(_,_,_,_) ->
+    erlang:nif_error(not_implemented).
+
+getsockname(_,_) ->
+    erlang:nif_error(not_implemented).
+
+socket_level() ->
+    erlang:nif_error(not_implemented).
+socket_level(_) ->
+    erlang:nif_error(not_implemented).
+
+socket_optname() ->
+    erlang:nif_error(not_implemented).
+socket_optname(_) ->
+    erlang:nif_error(not_implemented).
+
+socket_protocol() ->
+    erlang:nif_error(not_implemented).
+socket_protocol(_) ->
+    erlang:nif_error(not_implemented).
 
 errno_id(_) ->
-    erlang:error(not_implemented).
+    erlang:nif_error(not_implemented).
 
+socket_constant_foreach(_Constant, []) ->
+    undefined;
+socket_constant_foreach(Constant, [Fun|Funs]) ->
+    case Fun(Constant) of
+        undefined ->
+            socket_constant_foreach(Constant, Funs);
+        N when is_integer(N) ->
+            N
+    end.
 
+%%--------------------------------------------------------------------
+%%% Setuid helper
+%%--------------------------------------------------------------------
 dev(Dev) when is_list(Dev) ->
     open(0, [{dev, Dev}]).
 
 open(Port) ->
     open(Port, []).
 open(Port, Options) when is_integer(Port), is_list(Options) ->
-    Opt = case proplists:get_value(pipe, Options) of
+    {Tmpdir, Pipe} = make_unix_socket_path(Options),
+    {ok, FD} = fdopen(Pipe),
+
+    Cmd = getopts([
+                {port, Port},
+                {pipe, Pipe}
+                ] ++ Options),
+
+    Socket = exec(FD, Cmd),
+    close(FD),
+
+    cleanup_unix_socket(Tmpdir, Pipe),
+    Socket.
+
+% Run the setuid helper
+exec(FD, Cmd) ->
+    exec(FD, Cmd, {error,enoent}).
+
+exec(_FD, [], Errno) ->
+    Errno;
+exec(FD, [Cmd|Rest], _LastErrno) ->
+    Proc = open_port({spawn, Cmd}, [exit_status]),
+    ExitValue = receive
+        {Proc, {exit_status, 0}} ->
+            ok;
+        {Proc, {exit_status, 127}} ->
+            {error,enoent};
+        {Proc, {exit_status, Status}} ->
+            {error, errno_id(Status)}
+    end,
+
+    case ExitValue of
+        ok ->
+            fdget(FD);
+        {error,N} = Errno when N =:= eacces; N =:= enoent; N =:= eperm ->
+            exec(FD, Rest, Errno);
+        Errno ->
+            Errno
+    end.
+
+% Unix socket handling: retrieves the fd from the setuid helper
+make_unix_socket_path(Options) ->
+    {Tmpdir, Socket} = case proplists:get_value(pipe, Options) of
         undefined ->
             Tmp = procket_mktmp:dirname(),
             ok = procket_mktmp:make_dir(Tmp),
             Path = Tmp ++ "/sock",
-            [{pipe, Path}, {tmpdir, Tmp}] ++ Options;
-        _ ->
-            [{tmpdir, false}] ++ Options
-    end,
-    open_1(Port, Opt).
-
-open_1(Port, Options) ->
-    Pipe = proplists:get_value(pipe, Options),
-    {ok, Sockfd} = fdopen(Pipe),
-    Cmd = make_args(Port, Options),
-    case os:cmd(Cmd) of
-        "0" ->
-            FD = fdget(Sockfd),
-            cleanup(Sockfd, Pipe, Options),
-            FD;
-        Error ->
-            cleanup(Sockfd, Pipe, Options),
-            {error, errno_id(list_to_integer(Error))}
-    end.
-
-cleanup(Sockfd, Pipe, Options) ->
-    close(Sockfd),
-    ok = file:delete(Pipe),
-    case proplists:get_value(tmpdir, Options) of
-        false ->
-            ok;
+            {Tmp, Path};
         Path ->
-            procket_mktmp:close(Path)
-    end.
+            {false, Path}
+    end,
+    {Tmpdir, Socket}.
+
+cleanup_unix_socket(false, Pipe) ->
+    prim_file:delete(Pipe);
+cleanup_unix_socket(Tmpdir, Pipe) ->
+    prim_file:delete(Pipe),
+    procket_mktmp:close(Tmpdir).
 
 fdopen(Path) when is_list(Path) ->
     fdopen(list_to_binary(Path));
 fdopen(Path) when is_binary(Path), byte_size(Path) < ?UNIX_PATH_MAX ->
-    {ok, Socket} = socket(?PF_LOCAL, ?SOCK_STREAM, 0),
+    {ok, Socket} = socket(family(local), type(stream), 0),
     Len = byte_size(Path),
-    Sun = <<(sockaddr_common(?PF_LOCAL, Len))/binary,
+    Sun = <<(sockaddr_common(family(local), Len))/binary,
         Path/binary,
         0:((unix_path_max()-Len)*8)
         >>,
     ok = bind(Socket, Sun),
-    ok = listen(Socket, ?BACKLOG),
+    ok = listen(Socket, 0),
     {ok, Socket}.
 
 fdget(Socket) ->
     {ok, S} = accept(Socket),
     fdrecv(S).
 
+<<<<<<< HEAD
 make_args(Port, Options) ->
     Args = reorder_args(Port, Options),
     proplists:get_value(progname, Options, progname()) ++ " -v " ++
@@ -218,50 +396,70 @@ reorder_args(Port, Options) ->
             proplists:delete(ip, Options) ++ [IP]
     end,
     [{port, Port}] ++ NewOpts.
+=======
+% Construct the cli arguments for the helper
+getopts(Options) ->
+    Exec = proplists:get_value(exec, Options, ["", "sudo"]),
+    Progname = proplists:get_value(progname, Options, progname()),
 
-get_switch({pipe, Arg}) ->
-    "-u " ++ Arg;
+    Args = join([ optarg(Arg) || Arg <- Options ]),
+    Redirect = "> /dev/null 2>&1",
+>>>>>>> ffbb9b631829e2ddf3c7fb5113e9a4e726f032d7
 
-get_switch({protocol, Proto}) when is_atom(Proto) ->
-    get_switch({protocol, protocol(Proto)});
-get_switch({protocol, Proto}) when is_integer(Proto) ->
-    "-P " ++ integer_to_list(Proto);
+    [ join([E, Progname, Args, Redirect]) || E <- Exec ].
 
-get_switch({type, Type}) when is_atom(Type) ->
-    get_switch({type, type(Type)});
-get_switch({type, Type}) when is_integer(Type) ->
-    "-T " ++ integer_to_list(Type);
+join(StringList) ->
+    string:join([ N || N <- StringList, N =/= ""], " ").
 
-get_switch({family, Family}) when is_atom(Family) ->
-    get_switch({family, family(Family)});
-get_switch({family, Family}) when is_integer(Family) ->
-    "-F " ++ integer_to_list(Family);
+optarg({backlog, Arg}) ->
+    switch("b", Arg);
 
-get_switch({ip, Arg}) when is_tuple(Arg) -> inet_parse:ntoa(Arg);
-get_switch({ip, Arg}) when is_list(Arg) -> Arg;
+optarg({pipe, Arg}) ->
+    switch("u", Arg);
 
-get_switch({port, Port}) when is_integer(Port) ->
-    "-p " ++ integer_to_list(Port);
+optarg({protocol, Proto}) when is_atom(Proto) ->
+    optarg({protocol, protocol(Proto)});
+optarg({protocol, Proto}) when is_integer(Proto) ->
+    switch("P", Proto);
 
-get_switch({interface, Name}) when is_list(Name) ->
+optarg({type, Type}) when is_atom(Type) ->
+    optarg({type, type(Type)});
+optarg({type, Type}) when is_integer(Type) ->
+    switch("T", Type);
+
+optarg({family, Family}) when is_atom(Family) ->
+    optarg({family, family(Family)});
+optarg({family, Family}) when is_integer(Family) ->
+    switch("F", Family);
+
+optarg({ip, Arg}) when is_tuple(Arg) -> inet_parse:ntoa(Arg);
+optarg({ip, Arg}) when is_list(Arg) -> Arg;
+
+optarg({port, Port}) when is_integer(Port) ->
+    switch("p", Port);
+
+optarg({interface, Name}) when is_list(Name) ->
     case is_interface(Name) of
         true ->
-            "-I " ++ Name;
+            switch("I", Name);
         false ->
-            throw({bad_interface, Name})
+            erlang:error(badarg, [{interface, Name}])
     end;
 
-get_switch({dev, Dev}) when is_list(Dev) ->
+optarg({dev, Dev}) when is_list(Dev) ->
     case is_device(Dev) of
         true ->
-            "-d " ++ Dev;
+            switch("d", Dev);
         false ->
-            throw({bad_device, Dev})
+            erlang:error(badarg, [{dev, Dev}])
     end;
 
 % Ignore any other arguments
-get_switch(_Arg) ->
+optarg(_Arg) ->
     "".
+
+switch(Switch, Arg) ->
+    lists:concat(["-", Switch, " ", Arg]).
 
 is_interface(Name) when is_list(Name) ->
     % An interface name is expected to consist of a reasonable
@@ -283,7 +481,7 @@ progname_priv() ->
     case application:get_env( ?MODULE, port_executable ) of
         {ok, Executable} -> Executable;
         undefined -> filename:join([
-                            code:priv_dir( ?MODULE ), 
+                            code:priv_dir( ?MODULE ),
                             ?MODULE
                         ])
     end.
@@ -291,8 +489,8 @@ progname_priv() ->
 progname() ->
     % Is there a proper way of getting App-Name in this context?
     case code:priv_dir( ?MODULE ) of
-        {error,bad_name} -> progname_ebin();
-        ________________ -> progname_priv()
+        {error, bad_name} -> progname_ebin();
+        _ -> progname_priv()
     end.
 
 %% Protocol family (aka domain)
@@ -302,33 +500,34 @@ family(inet6) ->
     case os:type() of
         {unix, linux} -> 10;
         {unix, darwin} -> 30;
-        {unix, freebsd} -> 28
+        {unix, freebsd} -> 28;
+        {unix, netbsd} -> 24;
+        {unix, openbsd} -> 24;
+        {unix, sunos} -> 26
     end;
+family(netlink) -> 16;
 family(packet) -> 17;
+<<<<<<< HEAD
 family(pf_key) -> ?PF_KEY;
 family(Proto) when Proto == local; Proto == unix; Proto == file -> 1;
+=======
+family(Proto) when Proto == local; Proto == unix; Proto == file -> 1.
+>>>>>>> ffbb9b631829e2ddf3c7fb5113e9a4e726f032d7
 
-family(0) -> unspec;
-family(1) -> unix;
-family(2) -> inet;
-family(10) ->
+%% Socket type
+type(stream) ->
     case os:type() of
-        {unix, linux} -> inet6;
-        {unix, _} -> ccitt
+        {unix,sunos} -> 2;
+        {unix,_} -> 1
     end;
-family(17) ->
+type(dgram) ->
     case os:type() of
-        {unix, linux} -> packet;
-        {unix, _} -> route
+        {unix,sunos} -> 1;
+        {unix,_} -> 2
     end;
-family(28) ->
+type(raw) ->
     case os:type() of
-        % linux: not defined
-        {unix, freebsd} -> inet6;
-        {unix, darwin} -> isdn
-    end;
-family(30) ->
-    case os:type() of
+<<<<<<< HEAD
         {unix, linux} -> tipc;
         {unix, freebsd} -> atm;
         {unix, darwin} -> inet6
@@ -345,6 +544,11 @@ type(1) -> stream;
 type(2) -> dgram;
 type(3) -> raw.
 
+=======
+        {unix,sunos} -> 4;
+        {unix,_} -> 3
+    end.
+>>>>>>> ffbb9b631829e2ddf3c7fb5113e9a4e726f032d7
 
 % Select a protocol within the family (0 means use the default
 % protocol in the family)
@@ -352,6 +556,7 @@ protocol(ip) -> 0;
 protocol(icmp) -> 1;
 protocol(tcp) -> 6;
 protocol(udp) -> 17;
+<<<<<<< HEAD
 protocol(raw) -> 255;
 protocol(pf_key_v2) -> ?PF_KEY_V2;
 
@@ -360,6 +565,12 @@ protocol(1) -> icmp;
 protocol(6) -> tcp;
 protocol(255) -> raw;
 protocol(?PF_KEY_V2) -> pf_key_v2.
+=======
+protocol(ipv6) -> 41;
+protocol(icmp6) -> 58;
+protocol('ipv6-icmp') -> 58;
+protocol(raw) -> 255.
+>>>>>>> ffbb9b631829e2ddf3c7fb5113e9a4e726f032d7
 
 maybe_atom(_Type, Value) when is_integer(Value) -> Value;
 maybe_atom(family, Value) -> family(Value);
@@ -372,7 +583,8 @@ maybe_atom(protocol, Value) -> protocol(Value).
 %%
 
 % struct sockaddr
-sockaddr_common(Family, Length) ->
+sockaddr_common(Family0, Length) ->
+    Family = maybe_atom(family, Family0),
     case erlang:system_info(os_type) of
         {unix,BSD} when BSD == darwin;
             BSD == openbsd;

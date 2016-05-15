@@ -1,4 +1,4 @@
-%% Copyright (c) 2010-2011, Michael Santos <michael.santos@gmail.com>
+%% Copyright (c) 2010-2015, Michael Santos <michael.santos@gmail.com>
 %% All rights reserved.
 %%
 %% Redistribution and use in source and binary forms, with or without
@@ -57,7 +57,6 @@ name(Template) ->
     template(Template, ?ALPHANUM).
 
 template(Name, Chars) ->
-    crypto:start(),
     template(lists:reverse(Name), [], Chars).
 template([$X|Rest], Acc, Chars) ->
     template(Rest,
@@ -67,12 +66,12 @@ template(Name, Rand, _) when length(Rand) >= 6 ->
     lists:reverse(Name) ++ Rand.
 
 make_dir(Path) ->
-    case file:make_dir(Path) of
+    case prim_file:make_dir(Path) of
         ok ->
-            file:write_file_info(Path, #file_info{mode = ?S_IRWXU});
+            prim_file:write_file_info(Path, #file_info{mode = ?S_IRWXU});
         Error ->
             Error
     end.
 
 close(Path) ->
-    file:del_dir(Path).
+    prim_file:del_dir(Path).

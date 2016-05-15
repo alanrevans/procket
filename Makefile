@@ -1,23 +1,36 @@
-
-REBAR=$(shell which rebar || echo ./rebar)
+REBAR ?= rebar3
 
 all: dirs compile
-
-./rebar:
-	erl -noshell -s inets start -s ssl start \
-		-eval 'httpc:request(get, {"https://github.com/downloads/basho/rebar/rebar", []}, [], [{stream, "./rebar"}])' \
-		-s inets stop -s init stop
-	chmod +x ./rebar
 
 dirs:
 	-@mkdir -p priv/tmp
 
-compile: $(REBAR)
+compile:
 	@$(REBAR) compile
 
-clean: $(REBAR)
+clean:
 	@$(REBAR) clean
 
-deps: $(REBAR)
+deps:
 	@$(REBAR) get-deps
 
+examples: eg
+eg:
+	@erlc -I deps -o ebin examples/*.erl
+
+setuid: all
+	sudo chown root priv/procket
+	sudo chmod 4750 priv/procket
+
+.PHONY: dialyzer typer clean distclean
+
+dialyzer:
+	@$(REBAR) dialyzer
+
+typer: $(DEPSOLVER_PLT)
+	@typer -I include --plt $(DEPSOLVER_PLT) -r ./src
+
+distclean: clean
+	@rm $(DEPSOLVER_PLT)
+
+print-%: ; @echo $*=$($*)
