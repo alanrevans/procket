@@ -72,7 +72,8 @@
         ntohl/1,
         ntohs/1
     ]).
--export([on_load/0, make_args/2,progname/0]).
+%% -export([on_load/0, make_args/2,progname/0]).
+-export([on_load/0, progname/0]).
 
 % for debugging
 -export([
@@ -381,22 +382,21 @@ fdget(Socket) ->
     {ok, S} = accept(Socket),
     fdrecv(S).
 
-<<<<<<< HEAD
-make_args(Port, Options) ->
-    Args = reorder_args(Port, Options),
-    proplists:get_value(progname, Options, progname()) ++ " -v " ++
-    string:join([ get_switch(Arg) || Arg <- Args ], " ") ++
-    " > /dev/null 2>&1; printf $?".
+%% make_args(Port, Options) ->
+%%    Args = reorder_args(Port, Options),
+%%    proplists:get_value(progname, Options, progname()) ++ " -v " ++
+%%    string:join([ get_switch(Arg) || Arg <- Args ], " ") ++
+%%    " > /dev/null 2>&1; printf $?".
 
-reorder_args(Port, Options) ->
-    NewOpts = case proplists:lookup(ip, Options) of
-        none ->
-            Options;
-        IP ->
-            proplists:delete(ip, Options) ++ [IP]
-    end,
-    [{port, Port}] ++ NewOpts.
-=======
+%% reorder_args(Port, Options) ->
+%%    NewOpts = case proplists:lookup(ip, Options) of
+%%        none ->
+%%            Options;
+%%        IP ->
+%%            proplists:delete(ip, Options) ++ [IP]
+%%    end,
+%%    [{port, Port}] ++ NewOpts.
+
 % Construct the cli arguments for the helper
 getopts(Options) ->
     Exec = proplists:get_value(exec, Options, ["", "sudo"]),
@@ -404,7 +404,6 @@ getopts(Options) ->
 
     Args = join([ optarg(Arg) || Arg <- Options ]),
     Redirect = "> /dev/null 2>&1",
->>>>>>> ffbb9b631829e2ddf3c7fb5113e9a4e726f032d7
 
     [ join([E, Progname, Args, Redirect]) || E <- Exec ].
 
@@ -507,12 +506,10 @@ family(inet6) ->
     end;
 family(netlink) -> 16;
 family(packet) -> 17;
-<<<<<<< HEAD
 family(pf_key) -> ?PF_KEY;
+family(?PF_KEY) -> pf_key;
 family(Proto) when Proto == local; Proto == unix; Proto == file -> 1;
-=======
 family(Proto) when Proto == local; Proto == unix; Proto == file -> 1.
->>>>>>> ffbb9b631829e2ddf3c7fb5113e9a4e726f032d7
 
 %% Socket type
 type(stream) ->
@@ -527,28 +524,16 @@ type(dgram) ->
     end;
 type(raw) ->
     case os:type() of
-<<<<<<< HEAD
-        {unix, linux} -> tipc;
+%%        {unix, linux} -> tipc;
         {unix, freebsd} -> atm;
-        {unix, darwin} -> inet6
+        {unix, darwin} -> inet6;
+        {unix,sunos} -> 4;
+        {unix,_} -> 3
     end;
-family(?PF_KEY) ->
-    pf_key.
-
-%% Socket type
-type(stream) -> 1;
-type(dgram) -> 2;
-type(raw) -> 3;
 
 type(1) -> stream;
 type(2) -> dgram;
 type(3) -> raw.
-
-=======
-        {unix,sunos} -> 4;
-        {unix,_} -> 3
-    end.
->>>>>>> ffbb9b631829e2ddf3c7fb5113e9a4e726f032d7
 
 % Select a protocol within the family (0 means use the default
 % protocol in the family)
@@ -556,7 +541,6 @@ protocol(ip) -> 0;
 protocol(icmp) -> 1;
 protocol(tcp) -> 6;
 protocol(udp) -> 17;
-<<<<<<< HEAD
 protocol(raw) -> 255;
 protocol(pf_key_v2) -> ?PF_KEY_V2;
 
@@ -564,13 +548,11 @@ protocol(0) -> ip;
 protocol(1) -> icmp;
 protocol(6) -> tcp;
 protocol(255) -> raw;
-protocol(?PF_KEY_V2) -> pf_key_v2.
-=======
+protocol(?PF_KEY_V2) -> pf_key_v2;
 protocol(ipv6) -> 41;
 protocol(icmp6) -> 58;
 protocol('ipv6-icmp') -> 58;
 protocol(raw) -> 255.
->>>>>>> ffbb9b631829e2ddf3c7fb5113e9a4e726f032d7
 
 maybe_atom(_Type, Value) when is_integer(Value) -> Value;
 maybe_atom(family, Value) -> family(Value);
